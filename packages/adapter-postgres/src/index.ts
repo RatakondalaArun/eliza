@@ -24,7 +24,7 @@ import {
     getEmbeddingConfig,
     DatabaseAdapter,
     EmbeddingProvider,
-    RAGKnowledgeItem
+    RAGKnowledgeItem,
 } from "@elizaos/core";
 import fs from "fs";
 import { fileURLToPath } from "url";
@@ -62,6 +62,8 @@ export class PostgresDatabaseAdapter
             ...defaultConfig,
             ...connectionConfig, // Allow overriding defaults
         });
+
+        this.db = this.pool;
 
         this.pool.on("error", (err) => {
             elizaLogger.error("Unexpected pool error", err);
@@ -162,6 +164,8 @@ export class PostgresDatabaseAdapter
                 connectionTimeoutMillis: this.connectionTimeout,
             });
 
+            this.db = this.pool;
+
             await this.testConnection();
             elizaLogger.success("Pool reconnection successful");
         } catch (reconnectError) {
@@ -199,7 +203,7 @@ export class PostgresDatabaseAdapter
             return true;
         } catch (error) {
             elizaLogger.error("Failed to validate vector extension:", {
-                error: error instanceof Error ? error.message : String(error)
+                error: error instanceof Error ? error.message : String(error),
             });
             return false;
         }
@@ -239,8 +243,10 @@ export class PostgresDatabaseAdapter
                 );
             `);
 
-            if (!rows[0].exists || !await this.validateVectorSetup()) {
-                elizaLogger.info("Applying database schema - tables or vector extension missing");
+            if (!rows[0].exists || !(await this.validateVectorSetup())) {
+                elizaLogger.info(
+                    "Applying database schema - tables or vector extension missing"
+                );
                 const schema = fs.readFileSync(
                     path.resolve(__dirname, "../schema.sql"),
                     "utf8"
@@ -1515,12 +1521,17 @@ export class PostgresDatabaseAdapter
 
             const { rows } = await this.pool.query(sql, queryParams);
 
-            return rows.map(row => ({
+            return rows.map((row) => ({
                 id: row.id,
                 agentId: row.agentId,
-                content: typeof row.content === 'string' ? JSON.parse(row.content) : row.content,
-                embedding: row.embedding ? new Float32Array(row.embedding) : undefined,
-                createdAt: row.createdAt.getTime()
+                content:
+                    typeof row.content === "string"
+                        ? JSON.parse(row.content)
+                        : row.content,
+                embedding: row.embedding
+                    ? new Float32Array(row.embedding)
+                    : undefined,
+                createdAt: row.createdAt.getTime(),
             }));
         }, "getKnowledge");
     }
@@ -1536,7 +1547,7 @@ export class PostgresDatabaseAdapter
             const cacheKey = `embedding_${params.agentId}_${params.searchText}`;
             const cachedResult = await this.getCache({
                 key: cacheKey,
-                agentId: params.agentId
+                agentId: params.agentId,
             });
 
             if (cachedResult) {
@@ -1586,24 +1597,29 @@ export class PostgresDatabaseAdapter
             const { rows } = await this.pool.query(sql, [
                 vectorStr,
                 params.agentId,
-                `%${params.searchText || ''}%`,
+                `%${params.searchText || ""}%`,
                 params.match_threshold,
-                params.match_count
+                params.match_count,
             ]);
 
-            const results = rows.map(row => ({
+            const results = rows.map((row) => ({
                 id: row.id,
                 agentId: row.agentId,
-                content: typeof row.content === 'string' ? JSON.parse(row.content) : row.content,
-                embedding: row.embedding ? new Float32Array(row.embedding) : undefined,
+                content:
+                    typeof row.content === "string"
+                        ? JSON.parse(row.content)
+                        : row.content,
+                embedding: row.embedding
+                    ? new Float32Array(row.embedding)
+                    : undefined,
                 createdAt: row.createdAt.getTime(),
-                similarity: row.combined_score
+                similarity: row.combined_score,
             }));
 
             await this.setCache({
                 key: cacheKey,
                 agentId: params.agentId,
-                value: JSON.stringify(results)
+                value: JSON.stringify(results),
             });
 
             return results;
@@ -1614,7 +1630,7 @@ export class PostgresDatabaseAdapter
         return this.withDatabase(async () => {
             const client = await this.pool.connect();
             try {
-                await client.query('BEGIN');
+                await client.query("BEGIN");
 
                 const sql = `
                     INSERT INTO knowledge (
@@ -1625,8 +1641,9 @@ export class PostgresDatabaseAdapter
                 `;
 
                 const metadata = knowledge.content.metadata || {};
-                const vectorStr = knowledge.embedding ?
-                `[${Array.from(knowledge.embedding).join(",")}]` : null;
+                const vectorStr = knowledge.embedding
+                    ? `[${Array.from(knowledge.embedding).join(",")}]`
+                    : null;
 
                 await client.query(sql, [
                     knowledge.id,
@@ -1637,12 +1654,12 @@ export class PostgresDatabaseAdapter
                     metadata.isMain || false,
                     metadata.originalId || null,
                     metadata.chunkIndex || null,
-                    metadata.isShared || false
+                    metadata.isShared || false,
                 ]);
 
-                await client.query('COMMIT');
+                await client.query("COMMIT");
             } catch (error) {
-                await client.query('ROLLBACK');
+                await client.query("ROLLBACK");
                 throw error;
             } finally {
                 client.release();
@@ -1652,15 +1669,15 @@ export class PostgresDatabaseAdapter
 
     async removeKnowledge(id: UUID): Promise<void> {
         return this.withDatabase(async () => {
-            await this.pool.query('DELETE FROM knowledge WHERE id = $1', [id]);
+            await this.pool.query("DELETE FROM knowledge WHERE id = $1", [id]);
         }, "removeKnowledge");
     }
 
     async clearKnowledge(agentId: UUID, shared?: boolean): Promise<void> {
         return this.withDatabase(async () => {
-            const sql = shared ?
-                'DELETE FROM knowledge WHERE ("agentId" = $1 OR "isShared" = true)' :
-                'DELETE FROM knowledge WHERE "agentId" = $1';
+            const sql = shared
+                ? 'DELETE FROM knowledge WHERE ("agentId" = $1 OR "isShared" = true)'
+                : 'DELETE FROM knowledge WHERE "agentId" = $1';
 
             await this.pool.query(sql, [agentId]);
         }, "clearKnowledge");
